@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="ぶりっぶりゅ"/>
+  <title>ぶりっぶりゅあっしつれ〜い！</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { background: #0f0f14; overscroll-behavior: none; }
+    input, select, button { font-family: inherit; }
+    ::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script>
+    // localStorage をwindow.storageインターフェースに変換
+    window.storage = {
+      get: async (key) => {
+        const v = localStorage.getItem(key);
+        return v ? { key, value: v } : null;
+      },
+      set: async (key, value) => {
+        localStorage.setItem(key, value);
+        return { key, value };
+      },
+      delete: async (key) => {
+        localStorage.removeItem(key);
+        return { key, deleted: true };
+      },
+      list: async (prefix) => {
+        const keys = Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix));
+        return { keys };
+      }
+    };
+  </script>
+  <script type="text/babel" data-presets="react">
+import { useState, useEffect, useRef, useCallback } from "react";
+
+const BUSINESSES = [
+  { id: "oshikoi",  label: "推し恋",          color: "#FF6B9D" },
+  { id: "sports",  label: "デイリースポーツ",  color: "#4A9EFF" },
+  { id: "karakan", label: "からから麺",        color: "#FF8C42" },
+  { id: "aivral",  label: "AIvral構想",        color: "#7C5CBF" },
+  { id: "other",   label: "その他",            color: "#888888" },
+];
+const WEEKDAYS = ["日","月","火","水","木","金","土"];
+
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function today() { return localDateStr(new Date()); }
+function yesterday() { const d=new Date(); d.setDate(d.getDate()-1); return localDateStr(d); }
+function thisMonth() { return today().slice(0,7); }
+function formatDate(str) {
+  const d=new Date(str+"T00:00:00");
+  return `${d.getMonth()+1}/${d.getDate()}(${WEEKDAYS[d.getDay()]})`;
+}
+function daysUntil(str) {
+  const t=new Date(); t.setHours(0,0,0,0);
+  return Math.ceil((new Date(str+"T00:00:00")-t)/86400000);
+}
+function getPastDays(n) {
+  return [...Array(n)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(n-1-i)); return localDateStr(d); });
+}
+function getBiz(id) { return BUSINESSES.find(b=>b.id===id)||BUSINESSES[4]; }
+
+async function storageGet(key) {
+  try { const r=await window.storage.get(key); return r?JSON.parse(r.value):null; } catch { return null; }
+}
+async function storageSet(key,value) {
+  try { await window.storage.set(key,JSON.stringify(value)); } catch(e) { console.error(e); }
+}
+
+export default function App() {
+  const [tab,setTab]=useState("today");
+  const [dailyData,setDailyData]=useState({});
+  const [weeklyTasks,setWeeklyTasks]=useState([]);
+  const [monthlyGoals,setMonthlyGoals]=useState({});
+  const [recurringTasks,setRecurringTasks]=useState([]);
+  const [topTasks,setTopTasks]=useState([]); // 最優先タスク
+  const [loaded,setLoaded]=useState(false);
+  const [viewDate,setViewDate]=useState(today());
+
+  useEffect(()=>{
+    (async()=>{
+      const d=await storageGet("daily");
+      const w=await storageGet("weekly");
+      const m=await storageGet("monthly");
+      const r=await storageGet("recurring");
+      const tp=await storageGet("toptasks");
+      const dd=d||{}; const rr=r||[];
+      const t=today();
+      if(rr.length>0){
+        const existing=dd[t]?.tasks||[];
+        const existingRecIds=existing.filter(x=>x.recurringId).map(x=>x.recurringId);
+        const toAdd=rr.filter(rt=>!existingRecIds.includes(rt.id));
+        if(toAdd.length>0){
+          const injected=toAdd.map(rt=>({id:Date.now()+Math.random(),text:rt.text,bizId:rt.bizId,done:false,recurringId:rt.id}));
+          dd[t]={...dd[t],tasks:[...(dd[t]?.tasks||[]),...injected]};
+          await storageSet("daily",dd);
+        }
+      }
+      setDailyData(dd); setWeeklyTasks(w||[]); setMonthlyGoals(m||{});
+      setRecurringTasks(rr); setTopTasks(tp||[]);
+      setLoaded(true);
+    })();
+  },[]);
+
+  const saveDailyData=useCallback(async(next)=>{setDailyData(next);await storageSet("daily",next);},[]);
+  const saveWeekly=useCallback(async(next)=>{setWeeklyTasks(next);await storageSet("weekly",next);},[]);
+  const saveMonthly=useCallback(async(next)=>{setMonthlyGoals(next);await storageSet("monthly",next);},[]);
+  const saveRecurring=useCallback(async(next)=>{setRecurringTasks(next);await storageSet("recurring",next);},[]);
+  const saveTopTasks=useCallback(async(next)=>{setTopTasks(next);await storageSet("toptasks",next);},[]);
+
+  if(!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0f0f14",color:"#fff",fontFamily:"sans-serif"}}>読み込み中...</div>;
+
+  return (
+    <div style={{minHeight:"100vh",background:"#0f0f14",fontFamily:"'Hiragino Sans','Noto Sans JP',sans-serif",color:"#e8e8f0"}}>
+      <div style={{background:"#18181f",borderBottom:"1px solid #2a2a38",padding:"13px 20px",display:"flex",alignItems:"center"}}>
+        <span style={{fontSize:17,fontWeight:800,color:"#fff"}}>ぶりっぶりゅあっしつれ〜い！</span>
+        <span style={{marginLeft:"auto",fontSize:12,color:"#555"}}>{today()}</span>
+      </div>
+      <div style={{display:"flex",background:"#18181f",borderBottom:"1px solid #2a2a38"}}>
+        {[{id:"today",label:"今日/過去"},{id:"calendar",label:"月間"},{id:"monthly",label:"目標"},{id:"dashboard",label:"全体"}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"11px 0",background:tab===t.id?"#0f0f14":"transparent",border:"none",borderBottom:tab===t.id?"2px solid #FF6B9D":"2px solid transparent",color:tab===t.id?"#fff":"#555",fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer"}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div style={{padding:"18px 15px",maxWidth:640,margin:"0 auto"}}>
+        {tab==="today"&&<TodayTab dailyData={dailyData} onSave={saveDailyData} weeklyTasks={weeklyTasks} onSaveWeekly={saveWeekly} monthlyGoals={monthlyGoals} viewDate={viewDate} setViewDate={setViewDate} recurringTasks={recurringTasks} onSaveRecurring={saveRecurring} topTasks={topTasks} onSaveTopTasks={saveTopTasks}/>}
+        {tab==="calendar"&&<CalendarTab dailyData={dailyData} weeklyTasks={weeklyTasks} monthlyGoals={monthlyGoals}/>}
+        {tab==="monthly"&&<MonthlyTab monthlyGoals={monthlyGoals} onSave={saveMonthly}/>}
+        {tab==="dashboard"&&<DashboardTab dailyData={dailyData} monthlyGoals={monthlyGoals} weeklyTasks={weeklyTasks}/>}
+      </div>
+    </div>
+  );
+}
+
+// ======== TODAY TAB ========
+function TodayTab({dailyData,onSave,weeklyTasks,onSaveWeekly,monthlyGoals,viewDate,setViewDate,recurringTasks,onSaveRecurring,topTasks,onSaveTopTasks}){
+  const todayStr=today();
+  const ystStr=yesterday();
+  const isToday=viewDate===todayStr;
+  const dayData=dailyData[viewDate]||{tasks:[]};
+  const scrollRef=useRef(null);
+  const past30=getPastDays(30);
+
+  // 昨日の未完了タスク
+  const ystUndoneTasks=(dailyData[ystStr]?.tasks||[]).filter(t=>!t.done);
+
+  useEffect(()=>{
+    setTimeout(()=>{if(scrollRef.current)scrollRef.current.scrollLeft=scrollRef.current.scrollWidth;},100);
+  },[]);
+
+  const updateDay=async(next)=>await onSave({...dailyData,[viewDate]:next});
+  const toggleDailyTask=async(id)=>await updateDay({...dayData,tasks:(dayData.tasks||[]).map(t=>t.id===id?{...t,done:!t.done}:t)});
+  const deleteDailyTask=async(id)=>await updateDay({...dayData,tasks:(dayData.tasks||[]).filter(t=>t.id!==id)});
+  const toggleWeeklyTask=async(id)=>await onSaveWeekly(weeklyTasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const deleteWeeklyTask=async(id)=>await onSaveWeekly(weeklyTasks.filter(t=>t.id!==id));
+  const toggleTopTask=async(id)=>await onSaveTopTasks(topTasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const deleteTopTask=async(id)=>await onSaveTopTasks(topTasks.filter(t=>t.id!==id));
+
+  const viewD=new Date(viewDate+"T00:00:00");
+  const mGoals=monthlyGoals[thisMonth()]||{};
+  const activeWeekly=weeklyTasks.filter(t=>!t.done).sort((a,b)=>{if(!a.dueDate)return 1;if(!b.dueDate)return -1;return a.dueDate.localeCompare(b.dueDate);});
+  // 最優先タスクは完了しても削除するまで常に表示
+  const activeTop=topTasks.filter(t=>!t.done);
+  const doneTop=topTasks.filter(t=>t.done);
+
+  // デイリータスクを事業別にグループ
+  const dailyByBiz={};
+  (dayData.tasks||[]).forEach(t=>{
+    if(!dailyByBiz[t.bizId])dailyByBiz[t.bizId]=[];
+    dailyByBiz[t.bizId].push(t);
+  });
+
+  return (
+    <div>
+      {/* Date header + scroller */}
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:10}}>
+          <span style={{fontSize:24,fontWeight:800,color:"#fff"}}>{viewD.getMonth()+1}月{viewD.getDate()}日（{WEEKDAYS[viewD.getDay()]}）</span>
+          {isToday&&<span style={{fontSize:11,color:"#FF6B9D",background:"#FF6B9D22",padding:"2px 8px",borderRadius:99,fontWeight:700}}>今日</span>}
+        </div>
+        <div ref={scrollRef} style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:6,scrollbarWidth:"none"}}>
+          {past30.map(d=>{
+            const dd=new Date(d+"T00:00:00");
+            const tasks=dailyData[d]?.tasks||[];
+            const done=tasks.filter(t=>t.done).length;
+            const sel=d===viewDate,isT=d===todayStr;
+            return (
+              <button key={d} onClick={()=>setViewDate(d)} style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:1,padding:"6px 9px",background:sel?"#FF6B9D22":"transparent",border:`1px solid ${sel?"#FF6B9D":isT?"#555":"#2a2a38"}`,borderRadius:8,cursor:"pointer",minWidth:42}}>
+                <span style={{fontSize:10,color:sel?"#FF6B9D":isT?"#aaa":"#555"}}>{WEEKDAYS[dd.getDay()]}</span>
+                <span style={{fontSize:13,fontWeight:sel||isT?800:400,color:sel?"#fff":isT?"#ddd":"#777"}}>{dd.getDate()}</span>
+                {tasks.length>0?<span style={{fontSize:9,color:done===tasks.length?"#7fff7f":"#888"}}>{done}/{tasks.length}</span>:<span style={{fontSize:9,color:"#2a2a38"}}>—</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ① 昨日の未完了タスク */}
+      {isToday&&ystUndoneTasks.length>0&&(
+        <div style={{marginBottom:20,background:"#1f0a0a",border:"1px solid #ff444455",borderRadius:12,padding:14}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#ff6666",marginBottom:8}}>⚠ 昨日できなかったタスク（{ystUndoneTasks.length}件）</div>
+          {BUSINESSES.map(biz=>{
+            const group=ystUndoneTasks.filter(t=>t.bizId===biz.id);
+            if(!group.length)return null;
+            return (
+              <div key={biz.id} style={{marginBottom:6}}>
+                <div style={{fontSize:10,color:biz.color,fontWeight:700,marginBottom:3}}>{biz.label}</div>
+                {group.map(t=>(
+                  <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",background:"#2a1010",borderRadius:7,marginBottom:3}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:"#ff4444",flexShrink:0}}/>
+                    <span style={{flex:1,fontSize:13,color:"#ffaaaa"}}>{t.text}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ② 最優先タスク */}
+      <Section title="🔥 最優先タスク" addComp={isToday&&<AddTopTaskInline topTasks={topTasks} onSaveTopTasks={onSaveTopTasks}/>}>
+        {activeTop.length===0&&doneTop.length===0?<div style={{color:"#444",fontSize:13}}>なし</div>:null}
+        {activeTop.map(task=>(
+          <div key={task.id} style={{display:"flex",alignItems:"center",gap:9,background:"#1e1828",border:"1px solid #ff6b9d44",borderLeft:"3px solid #FF6B9D",borderRadius:8,padding:"10px 11px",marginBottom:6}}>
+            <button onClick={()=>toggleTopTask(task.id)} style={{background:"none",border:"2px solid #FF6B9D",borderRadius:4,width:19,height:19,cursor:"pointer",color:"#FF6B9D",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}/>
+            <span style={{flex:1,fontSize:14,color:"#fff",fontWeight:600}}>{task.text}</span>
+            <span style={{fontSize:11,color:getBiz(task.bizId).color,fontWeight:600,flexShrink:0}}>{getBiz(task.bizId).label}</span>
+            {isToday&&<button onClick={()=>deleteTopTask(task.id)} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:16,padding:0}}>×</button>}
+          </div>
+        ))}
+        {doneTop.map(task=>(
+          <div key={task.id} style={{display:"flex",alignItems:"center",gap:9,background:"#18181f",borderRadius:8,padding:"8px 11px",marginBottom:4,opacity:0.45}}>
+            <button onClick={()=>toggleTopTask(task.id)} style={{background:"#FF6B9D44",border:"2px solid #FF6B9D",borderRadius:4,width:19,height:19,cursor:"pointer",color:"#FF6B9D",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>✓</button>
+            <span style={{flex:1,fontSize:13,color:"#444",textDecoration:"line-through"}}>{task.text}</span>
+            {isToday&&<button onClick={()=>deleteTopTask(task.id)} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14,padding:0}}>×</button>}
+          </div>
+        ))}
+      </Section>
+
+      {/* ③ デイリータスク（事業別グループ） */}
+      <Section title="デイリータスク" addComp={isToday&&<AddDailyTaskInline dayData={dayData} updateDay={updateDay} recurringTasks={recurringTasks} onSaveRecurring={onSaveRecurring}/>}>
+        {Object.keys(dailyByBiz).length===0?<div style={{color:"#444",fontSize:13}}>タスクなし</div>:
+          BUSINESSES.map(biz=>{
+            const group=dailyByBiz[biz.id];
+            if(!group||!group.length)return null;
+            return (
+              <div key={biz.id} style={{marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:700,color:biz.color,marginBottom:5,display:"flex",alignItems:"center",gap:6}}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:biz.color}}/>
+                  {biz.label}
+                </div>
+                {group.map(task=>(
+                  <div key={task.id} style={{display:"flex",alignItems:"center",gap:9,background:"#1e1e28",border:`1px solid ${biz.color}22`,borderRadius:8,padding:"9px 11px",marginBottom:5}}>
+                    <button onClick={()=>toggleDailyTask(task.id)} style={{background:"none",border:`2px solid ${task.done?"#444":biz.color}`,borderRadius:4,width:19,height:19,cursor:"pointer",color:biz.color,fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{task.done?"✓":""}</button>
+                    <span style={{flex:1,fontSize:14,color:task.done?"#555":"#e8e8f0",textDecoration:task.done?"line-through":"none"}}>{task.text}</span>
+                    {task.recurringId&&<span style={{fontSize:10,color:"#555"}}>🔁</span>}
+                    {isToday&&<button onClick={()=>deleteDailyTask(task.id)} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:16,padding:0}}>×</button>}
+                  </div>
+                ))}
+              </div>
+            );
+          })
+        }
+      </Section>
+
+      {/* ④ 週間タスク */}
+      <Section title="ウィークタスク" addComp={isToday&&<AddWeeklyTaskInline weeklyTasks={weeklyTasks} onSaveWeekly={onSaveWeekly}/>}>
+        {activeWeekly.length===0?<div style={{color:"#444",fontSize:13}}>週間タスクなし</div>:activeWeekly.map(task=>{
+          const diff=task.dueDate?daysUntil(task.dueDate):null;
+          const urgency=diff===null?"none":diff<=0?"over":diff<=2?"soon":diff<=5?"near":"ok";
+          const cdColor={over:"#ff4444",soon:"#ff8844",near:"#ffcc44",ok:"#7fff7f",none:"#555"}[urgency];
+          return (
+            <div key={task.id} style={{display:"flex",alignItems:"center",gap:9,background:"#1e1e28",borderLeft:`3px solid ${getBiz(task.bizId).color}`,borderRadius:8,padding:"10px 11px",marginBottom:6}}>
+              <button onClick={()=>toggleWeeklyTask(task.id)} style={{background:"none",border:`2px solid ${getBiz(task.bizId).color}`,borderRadius:4,width:19,height:19,cursor:"pointer",flexShrink:0}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,color:"#e8e8f0",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{task.text}</div>
+                <div style={{display:"flex",gap:8}}>
+                  <span style={{fontSize:10,color:getBiz(task.bizId).color,fontWeight:600}}>{getBiz(task.bizId).label}</span>
+                  {task.dueDate&&<span style={{fontSize:10,color:"#555"}}>{formatDate(task.dueDate)}</span>}
+                </div>
+              </div>
+              {diff!==null&&<div style={{fontSize:12,fontWeight:800,color:cdColor,flexShrink:0}}>{diff===0?"今日":diff<0?`${Math.abs(diff)}日超`:`あと${diff}日`}</div>}
+              <button onClick={()=>deleteWeeklyTask(task.id)} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:16,padding:0}}>×</button>
+            </div>
+          );
+        })}
+        {weeklyTasks.filter(t=>t.done).map(task=>(
+          <div key={task.id} style={{display:"flex",alignItems:"center",gap:9,background:"#18181f",borderRadius:8,padding:"8px 11px",marginBottom:4,opacity:0.4}}>
+            <button onClick={()=>toggleWeeklyTask(task.id)} style={{background:getBiz(task.bizId).color+"44",border:`2px solid ${getBiz(task.bizId).color}`,borderRadius:4,width:19,height:19,cursor:"pointer",color:getBiz(task.bizId).color,fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>✓</button>
+            <span style={{flex:1,fontSize:13,color:"#444",textDecoration:"line-through"}}>{task.text}</span>
+            <button onClick={()=>deleteWeeklyTask(task.id)} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14,padding:0}}>×</button>
+          </div>
+        ))}
+      </Section>
+
+      {/* 今月の目標（参照） */}
+      <div style={{marginTop:4}}>
+        <div style={{fontSize:11,fontWeight:700,color:"#444",letterSpacing:"0.08em",marginBottom:8}}>今月の目標（参照）</div>
+        {BUSINESSES.map(biz=>{
+          const g=mGoals[biz.id];
+          return (
+            <div key={biz.id} style={{background:"#18181f",borderLeft:`3px solid ${biz.color}`,borderRadius:8,padding:"7px 13px",marginBottom:5}}>
+              <span style={{fontSize:11,color:biz.color,fontWeight:700}}>{biz.label}　</span>
+              <span style={{fontSize:13,color:g?.goal?"#aaa":"#333"}}>{g?.goal||"未設定"}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// 最優先タスク追加（インライン）
+function AddTopTaskInline({topTasks,onSaveTopTasks}){
+  const [open,setOpen]=useState(false);
+  const [text,setText]=useState("");
+  const [bizId,setBizId]=useState("oshikoi");
+  const add=async()=>{
+    if(!text.trim())return;
+    await onSaveTopTasks([...topTasks,{id:Date.now(),text:text.trim(),bizId,done:false}]);
+    setText("");setOpen(false);
+  };
+  if(!open) return <button onClick={()=>setOpen(true)} style={{background:"#FF6B9D",border:"none",color:"#fff",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>＋追加</button>;
+  return (
+    <div style={{display:"flex",gap:7,alignItems:"center"}}>
+      <select value={bizId} onChange={e=>setBizId(e.target.value)} style={{background:"#1e1e28",border:"1px solid #2a2a38",color:"#e8e8f0",borderRadius:7,padding:"6px 7px",fontSize:12,cursor:"pointer"}}>
+        {BUSINESSES.map(b=><option key={b.id} value={b.id}>{b.label}</option>)}
+      </select>
+      <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} autoFocus placeholder="最優先タスク..." style={{flex:1,background:"#1e1e28",border:"1px solid #FF6B9D",color:"#e8e8f0",borderRadius:7,padding:"6px 10px",fontSize:13,outline:"none"}}/>
+      <button onClick={add} style={{background:"#FF6B9D",border:"none",color:"#fff",borderRadius:7,padding:"6px 12px",fontWeight:700,cursor:"pointer"}}>+</button>
+      <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:18}}>×</button>
+    </div>
+  );
+}
+
+// デイリータスク追加（インライン）
+function AddDailyTaskInline({dayData,updateDay,recurringTasks,onSaveRecurring}){
+  const [open,setOpen]=useState(false);
+  const [text,setText]=useState("");
+  const [bizId,setBizId]=useState("oshikoi");
+  const [isRec,setIsRec]=useState(false);
+  const add=async()=>{
+    if(!text.trim())return;
+    const task={id:Date.now(),text:text.trim(),done:false,bizId};
+    await updateDay({...dayData,tasks:[...(dayData.tasks||[]),task]});
+    if(isRec) await onSaveRecurring([...recurringTasks,{id:Date.now()+1,text:text.trim(),bizId}]);
+    setText("");setIsRec(false);setOpen(false);
+  };
+  if(!open) return <button onClick={()=>setOpen(true)} style={{background:"#4A9EFF22",border:"1px solid #4A9EFF55",color:"#4A9EFF",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>＋追加</button>;
+  return (
+    <div>
+      <div style={{display:"flex",gap:7,marginBottom:6}}>
+        <select value={bizId} onChange={e=>setBizId(e.target.value)} style={{background:"#1e1e28",border:"1px solid #2a2a38",color:"#e8e8f0",borderRadius:7,padding:"6px 7px",fontSize:12,cursor:"pointer"}}>
+          {BUSINESSES.map(b=><option key={b.id} value={b.id}>{b.label}</option>)}
+        </select>
+        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} autoFocus placeholder="タスク..." style={{flex:1,background:"#1e1e28",border:"1px solid #4A9EFF",color:"#e8e8f0",borderRadius:7,padding:"6px 10px",fontSize:13,outline:"none"}}/>
+        <button onClick={add} style={{background:"#4A9EFF",border:"none",color:"#fff",borderRadius:7,padding:"6px 12px",fontWeight:700,cursor:"pointer"}}>+</button>
+        <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:18}}>×</button>
+      </div>
+      <button onClick={()=>setIsRec(!isRec)} style={{display:"flex",alignItems:"center",gap:5,background:isRec?"#7C5CBF22":"transparent",border:`1px solid ${isRec?"#7C5CBF":"#2a2a38"}`,borderRadius:7,padding:"4px 10px",cursor:"pointer",fontSize:12,color:isRec?"#b98fff":"#555"}}>
+        🔁 {isRec?"毎日繰り返す（ON）":"毎日繰り返す"}
+      </button>
+    </div>
+  );
+}
+
+// 週間タスク追加（インライン）
+function AddWeeklyTaskInline({weeklyTasks,onSaveWeekly}){
+  const [open,setOpen]=useState(false);
+  const [text,setText]=useState("");
+  const [bizId,setBizId]=useState("oshikoi");
+  const [due,setDue]=useState("");
+  const add=async()=>{
+    if(!text.trim())return;
+    await onSaveWeekly([...weeklyTasks,{id:Date.now(),text:text.trim(),bizId,dueDate:due,done:false}]);
+    setText("");setDue("");setOpen(false);
+  };
+  if(!open) return <button onClick={()=>setOpen(true)} style={{background:"#7C5CBF22",border:"1px solid #7C5CBF55",color:"#b98fff",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>＋追加</button>;
+  return (
+    <div>
+      <div style={{display:"flex",gap:7,marginBottom:6}}>
+        <select value={bizId} onChange={e=>setBizId(e.target.value)} style={{background:"#1e1e28",border:"1px solid #2a2a38",color:"#e8e8f0",borderRadius:7,padding:"6px 7px",fontSize:12,cursor:"pointer"}}>
+          {BUSINESSES.map(b=><option key={b.id} value={b.id}>{b.label}</option>)}
+        </select>
+        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} autoFocus placeholder="タスク..." style={{flex:1,background:"#1e1e28",border:"1px solid #7C5CBF",color:"#e8e8f0",borderRadius:7,padding:"6px 10px",fontSize:13,outline:"none"}}/>
+        <button onClick={add} style={{background:"#7C5CBF",border:"none",color:"#fff",borderRadius:7,padding:"6px 12px",fontWeight:700,cursor:"pointer"}}>+</button>
+        <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:18}}>×</button>
+      </div>
+      <div style={{display:"flex",gap:7,alignItems:"center"}}>
+        <span style={{fontSize:11,color:"#666"}}>期日</span>
+        <input type="date" value={due} onChange={e=>setDue(e.target.value)} style={{flex:1,background:"#1e1e28",border:"1px solid #2a2a38",color:"#e8e8f0",borderRadius:7,padding:"5px 10px",fontSize:12,outline:"none"}}/>
+      </div>
+    </div>
+  );
+}
+
+function Section({title,children,addComp}){
+  return (
+    <div style={{marginBottom:22}}>
+      <div style={{display:"flex",alignItems:"center",marginBottom:10}}>
+        <span style={{fontSize:12,fontWeight:700,color:"#777",letterSpacing:"0.05em"}}>{title}</span>
+        {addComp&&<div style={{marginLeft:"auto"}}>{addComp}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ======== CALENDAR TAB ========
+function CalendarTab({dailyData,weeklyTasks,monthlyGoals}){
+  const [calMonth,setCalMonth]=useState(thisMonth());
+  const [selectedDate,setSelectedDate]=useState(today());
+  const [y,m]=calMonth.split("-").map(Number);
+  const daysInMonth=new Date(y,m,0).getDate();
+  const firstDay=new Date(y,m-1,1).getDay();
+  const prevMonth=()=>{const d=new Date(y,m-2,1);setCalMonth(localDateStr(d).slice(0,7));};
+  const nextMonth=()=>{const d=new Date(y,m,1);setCalMonth(localDateStr(d).slice(0,7));};
+  const selDateStr=selectedDate;
+  const selDayData=dailyData[selDateStr]||{tasks:[]};
+  const selWeekly=weeklyTasks.filter(t=>t.dueDate===selDateStr);
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",marginBottom:16}}>
+        <button onClick={prevMonth} style={{background:"none",border:"1px solid #2a2a38",color:"#888",borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:14}}>‹</button>
+        <span style={{flex:1,textAlign:"center",fontSize:18,fontWeight:800,color:"#fff"}}>{y}年{m}月</span>
+        <button onClick={nextMonth} style={{background:"none",border:"1px solid #2a2a38",color:"#888",borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:14}}>›</button>
+      </div>
+      <div style={{background:"#1e1e28",borderRadius:12,padding:"12px 8px",marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",marginBottom:6}}>
+          {WEEKDAYS.map((w,i)=>(
+            <div key={w} style={{textAlign:"center",fontSize:11,fontWeight:700,color:i===0?"#ff6b6b":i===6?"#6b9fff":"#555",padding:"4px 0"}}>{w}</div>
+          ))}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+          {[...Array(firstDay)].map((_,i)=><div key={"e"+i}/>)}
+          {[...Array(daysInMonth)].map((_,i)=>{
+            const day=i+1;
+            const ds=`${calMonth}-${String(day).padStart(2,"0")}`;
+            const tasks=dailyData[ds]?.tasks||[];
+            const done=tasks.filter(t=>t.done).length;
+            const hasWeekly=weeklyTasks.some(t=>t.dueDate===ds);
+            const isT=ds===today(),isSel=ds===selectedDate;
+            const dow=new Date(ds+"T00:00:00").getDay();
+            return (
+              <button key={day} onClick={()=>setSelectedDate(ds)} style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"5px 2px",borderRadius:8,cursor:"pointer",background:isSel?"#FF6B9D22":isT?"#ffffff08":"transparent",border:`1px solid ${isSel?"#FF6B9D":isT?"#444":"transparent"}`,minHeight:50}}>
+                <span style={{fontSize:13,fontWeight:isT||isSel?800:400,color:isSel?"#FF6B9D":isT?"#fff":dow===0?"#ff6b6b":dow===6?"#6b9fff":"#aaa",marginBottom:2}}>{day}</span>
+                {tasks.length>0&&(
+                  <div style={{display:"flex",flexWrap:"wrap",gap:2,justifyContent:"center",maxWidth:26}}>
+                    {tasks.slice(0,4).map(t=><div key={t.id} style={{width:5,height:5,borderRadius:"50%",background:t.done?"#333":getBiz(t.bizId).color,opacity:t.done?0.4:1}}/>)}
+                  </div>
+                )}
+                {hasWeekly&&<div style={{fontSize:8,color:"#ffcc44"}}>📌</div>}
+                {tasks.length>0&&done===tasks.length&&<div style={{fontSize:8,color:"#7fff7f"}}>✓</div>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+        {BUSINESSES.map(b=>(
+          <div key={b.id} style={{display:"flex",alignItems:"center",gap:4}}>
+            <div style={{width:7,height:7,borderRadius:"50%",background:b.color}}/>
+            <span style={{fontSize:11,color:"#555"}}>{b.label}</span>
+          </div>
+        ))}
+      </div>
+      {selectedDate&&(
+        <div style={{background:"#1e1e28",border:"1px solid #2a2a38",borderRadius:12,padding:14}}>
+          <div style={{fontSize:15,fontWeight:800,color:"#fff",marginBottom:12}}>
+            {new Date(selDateStr+"T00:00:00").toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"short"})}
+          </div>
+          {selDayData.tasks.length===0&&selWeekly.length===0
+            ?<div style={{color:"#444",fontSize:13}}>記録なし</div>
+            :<>
+              {BUSINESSES.map(biz=>{
+                const group=selDayData.tasks.filter(t=>t.bizId===biz.id);
+                if(!group.length)return null;
+                return (
+                  <div key={biz.id} style={{marginBottom:8}}>
+                    <div style={{fontSize:10,color:biz.color,fontWeight:700,marginBottom:4}}>{biz.label}</div>
+                    {group.map(t=>(
+                      <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",background:"#0f0f14",borderRadius:7,marginBottom:3}}>
+                        <div style={{width:7,height:7,borderRadius:"50%",background:t.done?"#333":biz.color,flexShrink:0}}/>
+                        <span style={{flex:1,fontSize:13,color:t.done?"#555":"#ccc",textDecoration:t.done?"line-through":"none"}}>{t.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              {selWeekly.length>0&&(
+                <div style={{marginTop:8}}>
+                  <div style={{fontSize:10,color:"#ffcc44",fontWeight:700,marginBottom:4}}>週間タスク（期日）</div>
+                  {selWeekly.map(t=>(
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 8px",background:"#0f0f14",borderRadius:7,marginBottom:3}}>
+                      <span style={{fontSize:11}}>📌</span>
+                      <span style={{flex:1,fontSize:13,color:t.done?"#555":"#ccc",textDecoration:t.done?"line-through":"none"}}>{t.text}</span>
+                      <span style={{fontSize:10,color:getBiz(t.bizId).color,fontWeight:600}}>{getBiz(t.bizId).label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ======== MONTHLY TAB ========
+function MonthlyTab({monthlyGoals,onSave}){
+  const m=thisMonth();
+  const mData=monthlyGoals[m]||{};
+  const [editing,setEditing]=useState(null);
+  const [goalText,setGoalText]=useState("");
+  const [newTask,setNewTask]=useState("");
+  const [expandedBiz,setExpandedBiz]=useState(null);
+  const updateBiz=async(bizId,update)=>await onSave({...monthlyGoals,[m]:{...mData,[bizId]:{...mData[bizId],...update}}});
+  return (
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#fff",marginBottom:18}}>{new Date().toLocaleDateString("ja-JP",{year:"numeric",month:"long"})}の目標</div>
+      {BUSINESSES.map(biz=>{
+        const bizData=mData[biz.id]||{};
+        const tasks=bizData.tasks||[];
+        const done=tasks.filter(t=>t.done).length;
+        const isExp=expandedBiz===biz.id;
+        return (
+          <div key={biz.id} style={{marginBottom:10,background:"#1e1e28",border:`1px solid ${biz.color}22`,borderRadius:12,overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"13px 15px",cursor:"pointer",borderLeft:`4px solid ${biz.color}`}} onClick={()=>setExpandedBiz(isExp?null:biz.id)}>
+              <span style={{fontWeight:800,color:biz.color,fontSize:15}}>{biz.label}</span>
+              {tasks.length>0&&<span style={{fontSize:12,color:"#555"}}>{done}/{tasks.length}</span>}
+              <span style={{marginLeft:"auto",color:"#444",fontSize:13}}>{isExp?"▲":"▼"}</span>
+            </div>
+            <div style={{padding:"0 15px 13px",borderTop:"1px solid #2a2a38"}}>
+              <div style={{paddingTop:10}}>
+                {editing===biz.id
+                  ?<div style={{display:"flex",gap:7}}>
+                    <input value={goalText} onChange={e=>setGoalText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(updateBiz(biz.id,{goal:goalText}),setEditing(null))} autoFocus placeholder="今月の目標..." style={{flex:1,background:"#0f0f14",border:`1px solid ${biz.color}`,color:"#e8e8f0",borderRadius:8,padding:"7px 11px",fontSize:14,outline:"none"}}/>
+                    <button onClick={()=>{updateBiz(biz.id,{goal:goalText});setEditing(null);}} style={{background:biz.color,border:"none",color:"#fff",borderRadius:8,padding:"7px 12px",fontWeight:700,cursor:"pointer"}}>保存</button>
+                  </div>
+                  :<div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{flex:1,fontSize:14,color:bizData.goal?"#e8e8f0":"#444"}}>🎯 {bizData.goal||"目標を設定してください"}</span>
+                    <button onClick={()=>{setEditing(biz.id);setGoalText(bizData.goal||"");}} style={{background:"none",border:"1px solid #2a2a38",color:"#777",borderRadius:6,padding:"3px 9px",fontSize:12,cursor:"pointer"}}>{bizData.goal?"編集":"設定"}</button>
+                  </div>
+                }
+              </div>
+              {isExp&&(
+                <div style={{marginTop:11}}>
+                  {tasks.length>0&&<div style={{background:"#2a2a38",borderRadius:99,height:4,marginBottom:9}}><div style={{background:biz.color,width:`${(done/tasks.length)*100}%`,height:4,borderRadius:99,transition:"width 0.3s"}}/></div>}
+                  {tasks.map(task=>(
+                    <div key={task.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",background:"#0f0f14",borderRadius:7,marginBottom:5}}>
+                      <button onClick={()=>updateBiz(biz.id,{tasks:tasks.map(t=>t.id===task.id?{...t,done:!t.done}:t)})} style={{background:"none",border:`2px solid ${task.done?biz.color:"#444"}`,borderRadius:4,width:18,height:18,cursor:"pointer",color:biz.color,fontSize:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{task.done?"✓":""}</button>
+                      <span style={{flex:1,fontSize:13,color:task.done?"#555":"#ccc",textDecoration:task.done?"line-through":"none"}}>{task.text}</span>
+                      <button onClick={()=>updateBiz(biz.id,{tasks:tasks.filter(t=>t.id!==task.id)})} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:15}}>×</button>
+                    </div>
+                  ))}
+                  <div style={{display:"flex",gap:7,marginTop:6}}>
+                    <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newTask.trim()){updateBiz(biz.id,{tasks:[...tasks,{id:Date.now(),text:newTask.trim(),done:false}]});setNewTask("");}}} placeholder="マイルストーンを追加..." style={{flex:1,background:"#0f0f14",border:"1px solid #2a2a38",color:"#e8e8f0",borderRadius:8,padding:"7px 11px",fontSize:13,outline:"none"}}/>
+                    <button onClick={()=>{if(newTask.trim()){updateBiz(biz.id,{tasks:[...tasks,{id:Date.now(),text:newTask.trim(),done:false}]});setNewTask("");}}} style={{background:biz.color,border:"none",color:"#fff",borderRadius:8,padding:"7px 12px",fontWeight:700,cursor:"pointer"}}>+</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ======== DASHBOARD TAB ========
+function DashboardTab({dailyData,monthlyGoals,weeklyTasks}){
+  const m=thisMonth();
+  const mData=monthlyGoals[m]||{};
+  const daysThisMonth=Object.entries(dailyData).filter(([d])=>d.startsWith(m));
+  const bizStats=BUSINESSES.map(biz=>{
+    const mT=mData[biz.id]?.tasks||[];
+    let dT=0,dD=0;
+    daysThisMonth.forEach(([,dd])=>{(dd.tasks||[]).forEach(t=>{if(t.bizId===biz.id){dT++;if(t.done)dD++;}});});
+    const wT=weeklyTasks.filter(t=>t.bizId===biz.id);
+    return {biz,mT,mD:mT.filter(t=>t.done).length,dT,dD,wT,wD:wT.filter(t=>t.done).length,goal:mData[biz.id]?.goal};
+  });
+  const last14=getPastDays(14).map(d=>{
+    const tasks=dailyData[d]?.tasks||[];
+    const dd=new Date(d+"T00:00:00");
+    return {label:`${dd.getDate()}(${WEEKDAYS[dd.getDay()]})`,total:tasks.length,done:tasks.filter(t=>t.done).length};
+  });
+  return (
+    <div>
+      <div style={{fontSize:22,fontWeight:800,color:"#fff",marginBottom:4}}>全体</div>
+      <div style={{fontSize:12,color:"#555",marginBottom:18}}>{new Date().toLocaleDateString("ja-JP",{year:"numeric",month:"long"})}</div>
+      <div style={{fontSize:11,fontWeight:700,color:"#555",letterSpacing:"0.08em",marginBottom:10}}>事業別</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:22}}>
+        {bizStats.map(s=>(
+          <div key={s.biz.id} style={{background:"#1e1e28",border:`1px solid ${s.biz.color}22`,borderTop:`3px solid ${s.biz.color}`,borderRadius:10,padding:12}}>
+            <div style={{fontSize:13,fontWeight:800,color:s.biz.color,marginBottom:5}}>{s.biz.label}</div>
+            <div style={{fontSize:11,color:"#555",marginBottom:2}}>今月目標</div>
+            <div style={{fontSize:12,color:s.goal?"#aaa":"#333",marginBottom:7,minHeight:14}}>{s.goal||"未設定"}</div>
+            <div style={{background:"#2a2a38",borderRadius:99,height:3,marginBottom:2}}><div style={{background:s.biz.color,width:`${s.mT.length?((s.mD/s.mT.length)*100):0}%`,height:3,borderRadius:99}}/></div>
+            <div style={{fontSize:10,color:"#555",marginBottom:4}}>月間 {s.mD}/{s.mT.length}</div>
+            <div style={{fontSize:10,color:"#555"}}>週間 {s.wD}/{s.wT.length}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:11,fontWeight:700,color:"#555",letterSpacing:"0.08em",marginBottom:10}}>直近14日タスク</div>
+      <div style={{overflowX:"auto",paddingBottom:4,marginBottom:22}}>
+        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:80,minWidth:360}}>
+          {last14.map((d,i)=>{
+            const isT=i===13;
+            const pct=d.total?d.done/d.total:0;
+            const barH=d.total?Math.max(8,Math.round((d.total/8)*55)):3;
+            return (
+              <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                <div style={{fontSize:9,color:d.total>0&&d.done===d.total?"#7fff7f":"#555"}}>{d.total>0?`${d.done}/${d.total}`:""}</div>
+                <div style={{width:"100%",height:barH,background:isT?"#FF6B9D33":"#2a2a38",borderRadius:3,position:"relative",overflow:"hidden"}}>
+                  <div style={{position:"absolute",bottom:0,left:0,right:0,height:`${pct*100}%`,background:isT?"#FF6B9D":"#4A9EFF55",borderRadius:3}}/>
+                </div>
+                <div style={{fontSize:9,color:isT?"#FF6B9D":"#555",textAlign:"center"}}>{d.label}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{fontSize:11,fontWeight:700,color:"#555",letterSpacing:"0.08em",marginBottom:10}}>今月まとめ</div>
+      {(()=>{
+        const dT=bizStats.reduce((s,b)=>s+b.dT,0),dD=bizStats.reduce((s,b)=>s+b.dD,0);
+        return (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {[{label:"稼働日",value:daysThisMonth.length,unit:"日"},{label:"デイリー完了",value:`${dD}/${dT}`,unit:""},{label:"週間完了",value:`${weeklyTasks.filter(t=>t.done).length}/${weeklyTasks.length}`,unit:""}].map(s=>(
+              <div key={s.label} style={{background:"#1e1e28",borderRadius:10,padding:12,textAlign:"center"}}>
+                <div style={{fontSize:20,fontWeight:800,color:"#fff"}}>{s.value}<span style={{fontSize:11}}>{s.unit}</span></div>
+                <div style={{fontSize:10,color:"#555",marginTop:2}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
